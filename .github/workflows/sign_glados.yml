@@ -28,4 +28,4 @@ jobs:
           WX_CORPID: ${{ secrets.WX_CORPID }}
           WX_CORPSECRET: ${{ secrets.WX_CORPSECRET }}
           WX_AGENTID: ${{ secrets.WX_AGENTID }}
-        run: python sign_ikuuu.py  # 脚本名
+        run: python glados_checkin_auto.py  # 脚本名
