@@ -3,7 +3,7 @@ name: Auto Sign-in for BBS
 on:
   schedule:
     - cron: '20 23 * * *'
-  workflow_dispatch:  # 允许手动触发
+  workflow_dispatch:
 
 jobs:
   sign_in_job:
@@ -21,6 +21,8 @@ jobs:
       - name: Install dependencies
         run: |
           pip install requests
+          # 安装自定义 wx_msg 模块
+          pip install git+https://github.com/qqhsx/my-utils.git
 
       - name: Run sign-in script
         env:
@@ -28,4 +30,4 @@ jobs:
           WX_CORPID: ${{ secrets.WX_CORPID }}
           WX_CORPSECRET: ${{ secrets.WX_CORPSECRET }}
           WX_AGENTID: ${{ secrets.WX_AGENTID }}
-        run: python glados_checkin_auto.py  # 脚本名
+        run: python glados_checkin_auto.py
