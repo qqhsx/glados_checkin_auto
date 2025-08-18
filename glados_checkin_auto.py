@@ -4,8 +4,8 @@ import json
 from wx_msg import send_wx  
 
 # 微信企业号配置（可以写死，也可以用环境变量）
-corpid = os.environ.get("WX_CORPID", "ww3f27d938d39d2801")
-corpsecret = os.environ.get("WX_CORPSECRET", "Qecy2ITn0KiFjg4qP09cKCFxfhsaUsDDa3BkLES9KyA")
+corpid = os.environ.get("WX_CORPID", "")
+corpsecret = os.environ.get("WX_CORPSECRET", "")
 agentid = os.environ.get("WX_AGENTID", "1000003")
 touser = os.environ.get("WX_TOUSER", "@all")
 
@@ -44,7 +44,7 @@ def start():
     # 2. 如果没设置，就用下面本地写死的 cookies 列表
     cookies = os.environ.get("GLADOS_COOKIES", "").split("&") if os.environ.get("GLADOS_COOKIES") else [
         # 本地测试写这里，直接放浏览器复制的 cookie
-        "koa:sess=eyJ1c2VySWQiOjQxNzE0OCwiX2V4cGlyZSI6MTc4MTM5OTk0NDY4OCwiX21heEFnZSI6MjU5MjAwMDAwMDB9; koa:sess.sig=oVKyoPd8MdQrJCYao4drHc2uGZA",
+        "koa:sess=yyyy; koa:sess.sig=yyyy",
         # "koa:sess=yyyy; koa:sess.sig=yyyy"  # 可以多个
     ]
     for ck in cookies:
