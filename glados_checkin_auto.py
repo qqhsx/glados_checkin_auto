@@ -1,7 +1,7 @@
 import os
 import requests
 import json
-from wx_msg import send_wx  
+from wxmsg import send_wx
 
 # 微信企业号配置（可以写死，也可以用环境变量）
 corpid = os.environ.get("WX_CORPID", "")
