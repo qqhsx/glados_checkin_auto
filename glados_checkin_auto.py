@@ -11,7 +11,20 @@ touser = os.environ.get("WX_TOUSER", "@all")
 
 sendContent = ""
 
+def mask_email(email):
+    """对邮箱进行隐私打码"""
+    if "@" not in email:
+        return email
+    name, domain = email.split("@", 1)
+    if len(name) <= 3:
+        masked = name[0] + "***@" + domain
+    else:
+        masked = name[:3] + "***@" + domain
+    return masked
+
+
 def checkin(cookie):
+    """执行单账号签到"""
     url = "https://glados.rocks/api/user/checkin"
     url2 = "https://glados.rocks/api/user/status"
     headers = {
@@ -33,6 +46,7 @@ def checkin(cookie):
     if state.status_code == 200:
         data = state.json().get('data', {})
         email = data.get('email', '未知邮箱')
+        masked_email = mask_email(email)
         left_days = data.get('leftDays', 0)
 
         # 兼容 leftDays 类型（int / float / str）
@@ -44,7 +58,7 @@ def checkin(cookie):
             time = "未知"
 
         mess = checkin.json().get('message', '未知')
-        log = f"[glados] {email} 签到结果： {mess} 剩余({time})天"
+        log = f"[glados] {masked_email} 签到结果： {mess} 剩余({time})天"
         print(log)
 
         global sendContent
@@ -58,13 +72,14 @@ def checkin(cookie):
 
 
 def start():
+    """启动签到流程"""
     global sendContent
-    # 1. 如果设置了环境变量 GLADOS_COOKIES，就用环境变量（支持多账号，& 分隔）
-    # 2. 如果没设置，就用下面本地写死的 cookies 列表
+    # 1. 从环境变量读取多账号（&分隔）
+    # 2. 若无环境变量，则使用本地默认 Cookie
     cookies = os.environ.get("GLADOS_COOKIES", "").split("&") if os.environ.get("GLADOS_COOKIES") else [
-        # 本地测试写这里，直接放浏览器复制的 cookie
+        # 本地测试 Cookie 示例
         "koa:sess=yyyy; koa:sess.sig=yyyy",
-        # "koa:sess=yyyy; koa:sess.sig=yyyy"  # 可以多个
+        # "koa:sess=xxxx; koa:sess.sig=xxxx"
     ]
 
     for ck in cookies:
@@ -78,6 +93,7 @@ def start():
         send_wx(sendContent, corpid, corpsecret, agentid, touser)
     else:
         print("无签到结果可推送")
+
 
 if __name__ == "__main__":
     start()
