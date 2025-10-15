@@ -1,6 +1,7 @@
 import os
 import requests
 import json
+import time
 from wxmsg import send_wx
 
 # 微信企业号配置（可以写死，也可以用环境变量）
@@ -10,6 +11,7 @@ agentid = os.environ.get("WX_AGENTID", "1000003")
 touser = os.environ.get("WX_TOUSER", "@all")
 
 sendContent = ""
+
 
 def mask_email(email):
     """对邮箱进行隐私打码"""
@@ -21,6 +23,28 @@ def mask_email(email):
     else:
         masked = name[:3] + "***@" + domain
     return masked
+
+
+def safe_request(method, url, max_retries=3, delay=1, **kwargs):
+    """
+    安全请求方法：支持自动重试机制
+    method: "GET" 或 "POST"
+    max_retries: 最大重试次数
+    delay: 每次重试间隔秒数
+    """
+    for attempt in range(1, max_retries + 1):
+        try:
+            if method.upper() == "GET":
+                return requests.get(url, **kwargs)
+            elif method.upper() == "POST":
+                return requests.post(url, **kwargs)
+        except requests.RequestException as e:
+            print(f"[警告] 第 {attempt} 次请求失败: {e}")
+            if attempt < max_retries:
+                print(f"→ {delay} 秒后重试...")
+                time.sleep(delay)
+    print("[错误] 网络请求多次失败，跳过此账号。")
+    return None
 
 
 def checkin(cookie):
@@ -36,11 +60,12 @@ def checkin(cookie):
     }
     payload = {"token": "glados.one"}
 
-    try:
-        checkin = requests.post(url, headers=headers, data=json.dumps(payload), timeout=10)
-        state = requests.get(url2, headers=headers, timeout=10)
-    except requests.RequestException as e:
-        print(f"[错误] 网络请求失败: {e}")
+    # 使用自动重试版本的请求
+    checkin = safe_request("POST", url, headers=headers, data=json.dumps(payload), timeout=20)
+    state = safe_request("GET", url2, headers=headers, timeout=20)
+
+    if not checkin or not state:
+        print("[错误] 请求失败，跳过该账号。\n")
         return
 
     if state.status_code == 200:
@@ -51,14 +76,14 @@ def checkin(cookie):
 
         # 兼容 leftDays 类型（int / float / str）
         if isinstance(left_days, (int, float)):
-            time = str(int(left_days))
+            time_str = str(int(left_days))
         elif isinstance(left_days, str):
-            time = left_days.split('.')[0]
+            time_str = left_days.split('.')[0]
         else:
-            time = "未知"
+            time_str = "未知"
 
         mess = checkin.json().get('message', '未知')
-        log = f"[glados] {masked_email} 签到结果： {mess} 剩余({time})天"
+        log = f"[glados] {masked_email} 签到结果： {mess} 剩余({time_str})天"
         print(log)
 
         global sendContent
