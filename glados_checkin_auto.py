@@ -49,12 +49,12 @@ def safe_request(method, url, max_retries=3, delay=1, **kwargs):
 
 def checkin(cookie):
     """执行单账号签到"""
-    url = "https://glados.rocks/api/user/checkin"
-    url2 = "https://glados.rocks/api/user/status"
+    url = "https://glados.cloud/api/user/checkin"
+    url2 = "https://glados.cloud/api/user/status"
     headers = {
         "cookie": cookie,
-        "referer": "https://glados.rocks/console/checkin",
-        "origin": "https://glados.rocks",
+        "referer": "https://glados.cloud/console/checkin",
+        "origin": "https://glados.cloud",
         "user-agent": "Mozilla/5.0",
         "content-type": "application/json;charset=UTF-8"
     }
