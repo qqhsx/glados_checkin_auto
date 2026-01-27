@@ -58,7 +58,7 @@ def checkin(cookie):
         "user-agent": "Mozilla/5.0",
         "content-type": "application/json;charset=UTF-8"
     }
-    payload = {"token": "glados.one"}
+    payload = {"token": "glados.cloud"}
 
     # 使用自动重试版本的请求
     checkin = safe_request("POST", url, headers=headers, data=json.dumps(payload), timeout=20)
