@@ -1,178 +1,133 @@
 import os
-import json
-import hashlib
 import requests
+import json
+import time
+from wxmsg import send_wx
 
-# ==================== 配置区 ====================
-# 支持从环境变量 GLADOS_COOKIES 中获取，多个 Cookie 用 '&&' 分隔
-# 格式示例: gld:sess=xxx; gld:sess.sig=yyy&&gld:sess=zzz; gld:sess.sig=www
-RAW_COOKIES = os.environ.get("GLADOS_COOKIES", "")
-# 企业微信 Webhook 地址
-WECHAT_WEBHOOK_URL = os.environ.get("WECHAT_WEBHOOK_URL", "")
+# 微信企业号配置（支持环境变量）
+corpid = os.environ.get("WX_CORPID", "")
+corpsecret = os.environ.get("WX_CORPSECRET", "")
+agentid = os.environ.get("WX_AGENTID", "1000003")
+touser = os.environ.get("WX_TOUSER", "@all")
 
-CHECKIN_URL = "https://glados.one/api/user/checkin"
-STATUS_URL = "https://glados.one/api/user/status"
+sendContent = ""
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36 Edg/146.0.0.0",
-    "Content-Type": "application/json;charset=UTF-8",
-    "Origin": "https://glados.one",
-    "Referer": "https://glados.one/console/checkin"
-}
 
-def get_cookie_fingerprint(cookie_str: str) -> str:
-    """生成 Cookie 短指纹，用于识别 Cookie 但不泄露敏感数据"""
-    return hashlib.sha256(cookie_str.encode('utf-8')).hexdigest()[:8]
+def mask_email(email):
+    """对邮箱进行隐私打码"""
+    if "@" not in email:
+        return email
+    name, domain = email.split("@", 1)
+    if len(name) <= 3:
+        masked = name[0] + "***@" + domain
+    else:
+        masked = name[:3] + "***@" + domain
+    return masked
 
-def validate_cookie_format(cookie_str: str) -> bool:
-    """检查 Cookie 是否包含必要的 session 字段"""
-    return "gld:sess" in cookie_str and "gld:sess.sig" in cookie_str
 
-def do_checkin(cookie: str):
-    """执行签到请求并解析结果"""
-    headers = HEADERS.copy()
-    headers["Cookie"] = cookie.strip()
-    
-    try:
-        # GLaDOS 接口要求 POST {}
-        res = requests.post(CHECKIN_URL, headers=headers, json={}, timeout=15)
-        data = res.json()
-        
-        code = data.get("code")
-        message = data.get("message", "")
-        list_data = data.get("list", [])
-        
-        # 提取签到积分
-        points = 0
-        if list_data and isinstance(list_data, list) and len(list_data) > 0:
-            try:
-                points = int(float(list_data[0].get("balance", 0)))
-            except (ValueError, TypeError):
-                points = 0
+def safe_request(method, url, max_retries=3, delay=1, **kwargs):
+    """
+    安全请求方法：支持自动重试机制
+    method: "GET" 或 "POST"
+    """
+    for attempt in range(1, max_retries + 1):
+        try:
+            if method.upper() == "GET":
+                return requests.get(url, **kwargs)
+            elif method.upper() == "POST":
+                return requests.post(url, **kwargs)
+        except requests.RequestException as e:
+            print(f"[警告] 第 {attempt} 次请求失败: {e}")
+            if attempt < max_retries:
+                print(f"→ {delay} 秒后重试...")
+                time.sleep(delay)
+    print("[错误] 网络请求多次失败，跳过此账号。")
+    return None
 
-        # 判断签到状态
-        if code == -2:
-            return False, "没有权限（Cookie 无效或已过期）"
-        elif code == 4 or "device" in message.lower():
-            return False, f"设备不匹配 ({message})"
-        elif points > 0:
-            return True, f"签到成功，获得 {points} 积分"
-        elif "logged" in message.lower() or "repeat" in message.lower() or "tomorrow" in message.lower() or "已经" in message:
-            return True, "今日已签到，明天再来吧"
-        else:
-            return False, f"签到失败: {message if message else '未知状态'}"
-            
-    except Exception as e:
-        return False, f"请求异常: {str(e)}"
 
-def get_status_info(cookie: str):
-    """获取用户账号状态及剩余天数"""
-    headers = HEADERS.copy()
-    headers["Cookie"] = cookie.strip()
-    
-    try:
-        res = requests.post(STATUS_URL, headers=headers, json={}, timeout=15)
-        data = res.json()
-        
-        if data.get("code") == 0 and "data" in data:
-            user_data = data["data"]
-            email = user_data.get("email", "未知邮箱")
-            left_days = int(float(user_data.get("leftDays", 0)))
-            return True, email, left_days
-        else:
-            return False, "未知邮箱", 0
-    except Exception as e:
-        return False, "未知邮箱", 0
-
-def send_wechat_notice(content: str):
-    """发送企业微信 Bot 通知"""
-    if not WECHAT_WEBHOOK_URL:
-        print("[微信通知] 未配置 WECHAT_WEBHOOK_URL，跳过发送通知")
-        return
-        
-    payload = {
-        "msgtype": "text",
-        "text": {
-            "content": content
-        }
+def checkin(cookie):
+    """执行单账号签到"""
+    # 使用你最新确认可用的 glados.rocks 节点及请求参数
+    url = "https://glados.rocks/api/user/checkin"
+    url2 = "https://glados.rocks/api/user/status"
+    headers = {
+        "cookie": cookie,
+        "referer": "https://glados.rocks/console/checkin",
+        "origin": "https://glados.rocks",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36 Edg/151.0.0.0",
+        "content-type": "application/json;charset=UTF-8"
     }
-    
-    try:
-        res = requests.post(WECHAT_WEBHOOK_URL, json=payload, timeout=10)
-        res_json = res.json()
-        print(f"[微信通知] {res_json}")
-        print(f"[微信通知] {res_json.get('errcode') == 0}")
-    except Exception as e:
-        print(f"[微信通知失败] {str(e)}")
+    payload = {"token": "glados.rocks"}
 
-def main():
-    print("=" * 50)
-    print("GLaDOS 自动签到")
-    print("=" * 50)
-    print(f"Checkin URL : {CHECKIN_URL}")
-    print(f"Status URL  : {STATUS_URL}")
-    print(f"User-Agent  : {HEADERS['User-Agent']}")
-    print("=" * 50)
+    # 使用 safe_request 请求 API
+    checkin_res = safe_request("POST", url, headers=headers, data=json.dumps(payload), timeout=20)
+    state_res = safe_request("GET", url2, headers=headers, timeout=20)
 
-    # 拆分多账号 Cookie
-    cookies = [c.strip() for c in RAW_COOKIES.split("&&") if c.strip()]
-    if not cookies:
-        print("未检测到有效 Cookie，请在环境变量 GLADOS_COOKIES 中配置")
+    global sendContent
+
+    if not checkin_res or not state_res:
+        print("[错误] 请求失败，跳过该账号。\n")
         return
 
-    print(f"共发现 {len(cookies)} 个账号\n")
+    # 校验并提取状态信息
+    if state_res.status_code == 200:
+        try:
+            data = state_res.json().get('data', {})
+            email = data.get('email', '未知邮箱')
+            masked_email = mask_email(email)
+            left_days = data.get('leftDays', 0)
+
+            # 兼容 leftDays 类型（int / float / str）
+            if isinstance(left_days, (int, float)):
+                time_str = str(int(left_days))
+            elif isinstance(left_days, str):
+                time_str = left_days.split('.')[0]
+            else:
+                time_str = "未知"
+
+            # 获取签到返回消息
+            checkin_json = checkin_res.json()
+            mess = checkin_json.get('message', '未知')
+
+            log = f"[glados] {masked_email}----结果--{mess}----剩余({time_str})天"
+            print(log)
+            sendContent += log + "\n"
+
+        except Exception as e:
+            err_log = f"[错误] 解析响应数据失败: {e}"
+            print(err_log)
+            sendContent += err_log + "\n"
+    else:
+        err_log = f"[错误] Cookie已失效或查询失败，状态码：{state_res.status_code}"
+        print(err_log)
+        sendContent += err_log + "\n"
+
+
+def start():
+    """启动签到流程"""
+    global sendContent
+    # 支持 GLADOS_COOKIE 和 GLADOS_COOKIES 两种环境变量命名
+    raw_cookies = os.environ.get("GLADOS_COOKIE") or os.environ.get("GLADOS_COOKIES") or ""
     
-    summary_logs = []
+    # 拆分 & 连接的多账号 Cookie
+    cookies = [c.strip() for c in raw_cookies.split("&") if c.strip()] if raw_cookies else [
+        # 本地测试 Cookie 示例
+        # "koa:sess=xxxx; koa:sess.sig=xxxx"
+    ]
 
-    for idx, cookie in enumerate(cookies, start=1):
-        print(f"开始处理第 {idx} 个账号")
-        print("-" * 50)
-        
-        fingerprint = get_cookie_fingerprint(cookie)
-        print(f"[Cookie 指纹] {fingerprint}")
+    if not cookies:
+        print("未获取到 COOKIE 变量，请先配置环境变量。")
+        return
 
-        # 校验 Cookie 格式完整性
-        if not validate_cookie_format(cookie):
-            msg = "[状态] Cookie 格式错误 (缺少 gld:sess 或 gld:sess.sig)"
-            print(msg)
-            result_str = f"[glados] 指纹:{fingerprint} 签到结果： Cookie 格式不完整 剩余(0)天"
-            print(result_str)
-            summary_logs.append(result_str)
-            print()
-            continue
+    for ck in cookies:
+        checkin(ck)
 
-        # 先执行签到操作
-        success, checkin_msg = do_checkin(cookie)
+    # 签到完成后，推送到企业微信
+    if sendContent:
+        send_wx(sendContent, corpid, corpsecret, agentid, touser)
+    else:
+        print("无签到结果可推送")
 
-        # 获取账号 status 信息
-        status_ok, email, left_days = get_status_info(cookie)
-
-        # 格式化邮箱掩码显示 (例如 abc***@qq.com)
-        if "@" in email:
-            name, domain = email.split("@", 1)
-            masked_email = f"{name[:3]}***@{domain}" if len(name) > 3 else f"{name}***@{domain}"
-        else:
-            masked_email = email
-
-        if not status_ok:
-            print("[账号] 未知邮箱")
-            print(f"[状态] {checkin_msg}")
-        else:
-            print(f"[账号] {masked_email}")
-            print(f"[状态] Cookie 有效")
-            print(f"[状态] 剩余 {left_days} 天")
-
-        log_item = f"[glados] {masked_email} 签到结果： {checkin_msg} 剩余({left_days})天"
-        print(log_item)
-        summary_logs.append(log_item)
-        print()
-
-    print("=" * 50)
-    print("准备发送企业微信通知")
-    print("=" * 50)
-    
-    notice_text = "GLaDOS 自动签到结果：\n" + "\n".join(summary_logs)
-    send_wechat_notice(notice_text)
 
 if __name__ == "__main__":
-    main()
+    start()
