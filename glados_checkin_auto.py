@@ -48,16 +48,16 @@ def safe_request(method, url, max_retries=3, delay=1, **kwargs):
 def checkin(cookie):
     """执行单账号签到"""
     # 使用你最新确认可用的 glados.rocks 节点及请求参数
-    url = "https://glados.rocks/api/user/checkin"
-    url2 = "https://glados.rocks/api/user/status"
+    url = "https://glados.cloud/api/user/checkin"
+    url2 = "https://glados.cloud/api/user/status"
     headers = {
         "cookie": cookie,
-        "referer": "https://glados.rocks/console/checkin",
-        "origin": "https://glados.rocks",
+        "referer": "https://glados.cloud/console/checkin",
+        "origin": "https://glados.cloud",
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36 Edg/151.0.0.0",
         "content-type": "application/json;charset=UTF-8"
     }
-    payload = {"token": "glados.rocks"}
+    payload = {"token": "glados.cloud"}
 
     # 使用 safe_request 请求 API
     checkin_res = safe_request("POST", url, headers=headers, data=json.dumps(payload), timeout=20)
