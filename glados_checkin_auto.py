@@ -6,6 +6,8 @@ import time
 from datetime import datetime, timedelta, timezone
 
 import requests
+from wxmsg import send_wx
+
 
 DEFAULT_CHECKIN_TOKEN = "glados.cloud"
 
@@ -21,8 +23,8 @@ TIMEOUT = (10, 30)
 MAX_ATTEMPTS = 3
 
 EXIT_OK = 0
-EXIT_FATAL = 1        # 至少有一个账号发生致命错误
-EXIT_RETRYABLE = 2    # 网络临时故障
+EXIT_FATAL = 1
+EXIT_RETRYABLE = 2
 
 SUCCESS_MARKERS = (
     "checkin!",
@@ -84,7 +86,7 @@ def log(message):
 
 
 def get_env(name, default=None):
-    """读取环境变量。空字符串按"未设置"处理。"""
+    """读取环境变量。空字符串按未设置处理。"""
     value = os.getenv(name)
     if value is None:
         return default
@@ -107,10 +109,9 @@ def require_cookies():
     )
 
     cookies = [c.strip() for c in raw_cookies.splitlines() if c.strip()]
-    
+
     final_cookies = []
     for c in cookies:
-        # 支持以 koa:sess 或 gld:sess 开头的多账号自动拆分
         if c.count("koa:sess=") > 1:
             parts = ["koa:sess=" + p for p in c.split("koa:sess=") if p.strip()]
             final_cookies.extend([p.strip(" #&;") for p in parts])
@@ -150,7 +151,6 @@ def candidate_base_urls():
 
 def build_session(cookie):
     session = requests.Session()
-    # 模拟真实 Chrome 浏览器 Header，确保 gld:sess 通过 Cloudflare 与后端鉴权
     session.headers.update(
         {
             "Accept": "application/json, text/plain, */*",
@@ -202,7 +202,9 @@ def request_json(session, method, url, origin, payload=None):
         try:
             log(f"{method.upper()} {url} (attempt {attempt}/{MAX_ATTEMPTS})")
             if payload is None:
-                response = session.request(method, url, timeout=TIMEOUT, headers=headers)
+                response = session.request(
+                    method, url, timeout=TIMEOUT, headers=headers
+                )
             else:
                 response = session.request(
                     method,
@@ -211,14 +213,15 @@ def request_json(session, method, url, origin, payload=None):
                     headers=headers,
                     data=json.dumps(payload),
                 )
+
             body = parse_json_response(response)
-            
+
             redacted_body = redact(body)
             msg = redacted_body.get("message") if isinstance(redacted_body, dict) else None
             if not msg:
                 dump_str = json.dumps(redacted_body, ensure_ascii=False)
                 msg = dump_str if len(dump_str) <= 120 else dump_str[:120] + "..."
-            
+
             log(f"HTTP {response.status_code}: {msg}")
 
             if response.status_code in (401, 403):
@@ -337,6 +340,14 @@ def do_checkin(session, base_urls, token):
 
 
 def report_account(session, base_url):
+    """读取账号状态，并返回通知需要的数据。"""
+    result = {
+        "email": None,
+        "left_days": None,
+        "points": None,
+        "points_change": None,
+    }
+
     try:
         status_payload = request_json(
             session, "get", f"{base_url}/api/user/status", base_url
@@ -348,9 +359,12 @@ def report_account(session, base_url):
             data = status_payload["data"]
             email = data.get("email")
             if email:
-                log(f"Account Email: {mask_email(email)}")
+                result["email"] = mask_email(email)
+                log(f"Account Email: {result['email']}")
+
             left_days = data.get("leftDays")
             if left_days is not None:
+                result["left_days"] = left_days
                 log(f"Current leftDays: {left_days}")
 
     try:
@@ -359,23 +373,28 @@ def report_account(session, base_url):
         )
     except (FatalError, RetryableError) as exc:
         log(f"WARNING: 读取 points 失败: {exc}")
-        return
+        return result
 
     if not isinstance(points_payload, dict) or points_payload.get("points") is None:
         log("WARNING: 无法从 points 响应读取 points 字段。")
-        return
+        return result
 
-    change = ""
+    result["points"] = points_payload.get("points")
+
     history = points_payload.get("history")
     if isinstance(history, list) and history and isinstance(history[0], dict):
         delta = history[0].get("change")
         if delta is not None:
-            change = f"（最近一次变化 {delta}）"
-    log(f"Current points: {points_payload.get('points')}{change}")
+            result["points_change"] = delta
+            log(f"Current points: {result['points']}（最近一次变化 {delta}）")
+            return result
+
+    log(f"Current points: {result['points']}")
+    return result
 
 
 def process_single_account(index, total, cookie, token, base_urls):
-    """处理单个账号签到。"""
+    """处理单个账号签到，返回通知所需结果。"""
     hash_tag = hashlib.sha256(cookie.encode()).hexdigest()[:12]
     log(f"=================== 正在处理账号 [{index}/{total}] ===================")
     log(f"Cookie 长度 {len(cookie)}，sha256 指纹 {hash_tag}")
@@ -386,15 +405,113 @@ def process_single_account(index, total, cookie, token, base_urls):
     message = response_message(checkin_payload)
 
     log(f"签到结果: {message or status}")
-    report_account(session, base_url)
+
+    account_info = report_account(session, base_url)
 
     if status != "success":
-        log(f"ERROR: {explain_failure(status, checkin_payload, token, base_url)}")
+        error_text = explain_failure(status, checkin_payload, token, base_url)
+        log(f"ERROR: {error_text}")
+        return {
+            "success": False,
+            "status": status,
+            "message": message or error_text,
+            **account_info,
+        }
+
+    return {
+        "success": True,
+        "status": status,
+        "message": message or "签到成功",
+        **account_info,
+    }
+
+
+def build_wechat_message(results, start_time):
+    """生成企业微信汇总消息。"""
+    total = len(results)
+    success_count = sum(1 for item in results if item.get("success"))
+    failed_count = total - success_count
+
+    lines = [
+        "🤖 GLADOS 自动签到",
+        "",
+        f"时间：{start_time}",
+        f"总账号：{total}",
+        f"签到成功：{success_count}",
+        f"签到失败：{failed_count}",
+        "",
+    ]
+
+    for index, item in enumerate(results, 1):
+        email = item.get("email") or f"账号 {index}"
+        if item.get("success"):
+            lines.append(f"{index}. {email}")
+            lines.append("   ✅ 签到成功")
+
+            points = item.get("points")
+            if points is not None:
+                point_text = f"   积分：{points}"
+                delta = item.get("points_change")
+                if delta is not None:
+                    point_text += f"（变化 {delta}）"
+                lines.append(point_text)
+
+            left_days = item.get("left_days")
+            if left_days is not None:
+                lines.append(f"   剩余：{left_days} 天")
+        else:
+            lines.append(f"{index}. {email}")
+            lines.append("   ❌ 签到失败")
+            message = item.get("message") or item.get("status") or "未知错误"
+            lines.append(f"   原因：{message}")
+
+        if index < total:
+            lines.append("")
+
+    lines.extend(
+        [
+            "",
+            f"结果：{success_count}/{total} 成功",
+        ]
+    )
+
+    return "\n".join(lines)
+
+
+def send_wechat_notification(results, start_time):
+    """发送企业微信通知。未配置企业微信时不影响签到结果。"""
+    corpid = get_env("WX_CORPID")
+    corpsecret = get_env("WX_CORPSECRET")
+    agentid = get_env("WX_AGENTID")
+
+    if not corpid or not corpsecret or not agentid:
+        log("WARNING: WX_CORPID / WX_CORPSECRET / WX_AGENTID 未完整设置，跳过微信通知。")
         return False
-    return True
+
+    message = build_wechat_message(results, start_time)
+
+    try:
+        ok = send_wx(
+            message,
+            corpid,
+            corpsecret,
+            agentid,
+        )
+    except Exception as exc:
+        log(f"[微信通知失败] {exc}")
+        return False
+
+    if ok:
+        log("[微信通知] 发送成功")
+    else:
+        log("[微信通知] 发送失败")
+
+    return ok
 
 
 def main():
+    start_time = now_text()
+
     cookies = require_cookies()
     token = resolve_token()
     base_urls = candidate_base_urls()
@@ -404,25 +521,64 @@ def main():
 
     success_count = 0
     has_fatal_error = False
+    results = []
 
     for idx, cookie in enumerate(cookies, 1):
         try:
-            if process_single_account(idx, total, cookie, token, base_urls):
+            result = process_single_account(
+                idx, total, cookie, token, base_urls
+            )
+            results.append(result)
+
+            if result.get("success"):
                 success_count += 1
+            else:
+                has_fatal_error = True
+
         except FatalError as exc:
             log(f"ERROR 账号 [{idx}/{total}] 发生致命错误: {exc}")
             has_fatal_error = True
+            results.append(
+                {
+                    "success": False,
+                    "status": "fatal_error",
+                    "message": str(exc),
+                    "email": None,
+                    "left_days": None,
+                    "points": None,
+                    "points_change": None,
+                }
+            )
+
         except Exception as exc:
             log(f"ERROR 账号 [{idx}/{total}] 执行异常: {exc}")
             has_fatal_error = True
+            results.append(
+                {
+                    "success": False,
+                    "status": "exception",
+                    "message": str(exc),
+                    "email": None,
+                    "left_days": None,
+                    "points": None,
+                    "points_change": None,
+                }
+            )
 
         if idx < total:
             time.sleep(3)
 
-    log(f"=================== 所有任务完成 [{success_count}/{total}] 成功 ===================")
-    
+    log(
+        f"=================== 所有任务完成 "
+        f"[{success_count}/{total} 成功] ==================="
+    )
+
+    # 所有账号处理完后，只发送一条企业微信汇总消息。
+    send_wechat_notification(results, start_time)
+
     if has_fatal_error or success_count < total:
         return EXIT_FATAL
+
     return EXIT_OK
 
 
