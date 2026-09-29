@@ -302,6 +302,16 @@ def explain_failure(status, payload, token, base_url):
     )
 
 
+def format_number(value):
+    """去掉数字字符串末尾无意义的 0 和小数点。"""
+    if value is None:
+        return None
+    text = str(value).strip()
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text
+
+
 def mask_email(email):
     """脱敏邮箱显示，如 abc***@gmail.com。"""
     if not email or "@" not in email:
@@ -364,8 +374,8 @@ def report_account(session, base_url):
 
             left_days = data.get("leftDays")
             if left_days is not None:
-                result["left_days"] = left_days
-                log(f"Current leftDays: {left_days}")
+                result["left_days"] = format_number(left_days)
+                log(f"Current leftDays: {result['left_days']}")
 
     try:
         points_payload = request_json(
@@ -379,14 +389,14 @@ def report_account(session, base_url):
         log("WARNING: 无法从 points 响应读取 points 字段。")
         return result
 
-    result["points"] = points_payload.get("points")
+    result["points"] = format_number(points_payload.get("points"))
 
     history = points_payload.get("history")
     if isinstance(history, list) and history and isinstance(history[0], dict):
         delta = history[0].get("change")
         if delta is not None:
-            result["points_change"] = delta
-            log(f"Current points: {result['points']}（最近一次变化 {delta}）")
+            result["points_change"] = format_number(delta)
+            log(f"Current points: {result['points']}（最近一次变化 {result['points_change']}）")
             return result
 
     log(f"Current points: {result['points']}")
